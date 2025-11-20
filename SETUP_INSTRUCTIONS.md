@@ -1,6 +1,6 @@
 # 🛠️ SMART INBOX TRIAGER - SETUP GUIDE
 
-## ⚡ QUICK START (15 Minutes)
+## ⚡ QUICK START
 
 ### Prerequisites:
 - n8n instance (cloud or self-hosted)
@@ -319,7 +319,7 @@ Health Check: /healthz endpoint
 
 ## 📞 SUPPORT
 
-**Issues?** Contact: [your-email]@sap.com
+**Issues?** Contact: soumyadastopper@gmail.com
 
 **Documentation:**
 - n8n Docs: https://docs.n8n.io
