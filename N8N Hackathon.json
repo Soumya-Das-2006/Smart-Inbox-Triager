@@ -1,0 +1,488 @@
+{
+  "name": "Smart Inbox Triager",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "mailbox": "INBOX",
+        "postProcessAction": "markRead",
+        "options": {}
+      },
+      "id": "gmail-trigger",
+      "name": "Gmail Trigger",
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "credentials": {
+        "imap": {
+          "id": "GMAIL_CREDENTIALS_ID",
+          "name": "Gmail IMAP"
+        }
+      },
+      "notes": "Monitors inbox every 30s for new emails"
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "email_subject",
+              "value": "={{ $json.subject }}"
+            },
+            {
+              "name": "email_body",
+              "value": "={{ $json.text }}"
+            },
+            {
+              "name": "sender_email",
+              "value": "={{ $json.from.address }}"
+            },
+            {
+              "name": "sender_name",
+              "value": "={{ $json.from.name }}"
+            },
+            {
+              "name": "received_time",
+              "value": "={{ $json.date }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-variables",
+      "name": "Extract Email Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [450, 300],
+      "notes": "Extracts and standardizes email fields"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"gpt-4-turbo\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are an email classification assistant. Analyze emails and return ONLY valid JSON.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Classify this email:\\n\\nSubject: {{ $json.email_subject }}\\nFrom: {{ $json.sender_email }}\\nBody: {{ $json.email_body }}\\n\\nReturn JSON with: category (support/sales/spam), summary, urgency (low/medium/high), sentiment (positive/neutral/negative/angry), suggested_action, priority_score (1-10)\"\n    }\n  ],\n  \"temperature\": 0.3,\n  \"max_tokens\": 500\n}",
+        "options": {}
+      },
+      "id": "ai-classification",
+      "name": "AI Classification (OpenAI)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [650, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "OPENAI_CREDENTIALS_ID",
+          "name": "OpenAI API"
+        }
+      },
+      "notes": "GPT-4 classifies email and extracts insights"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse AI response and add sentiment score\nconst aiResponse = JSON.parse($input.item.json.choices[0].message.content);\n\n// Calculate sentiment score\nlet sentimentScore = 0;\nif (aiResponse.sentiment === 'positive') sentimentScore = 1;\nif (aiResponse.sentiment === 'negative') sentimentScore = -1;\nif (aiResponse.sentiment === 'angry') sentimentScore = -2;\n\n// Enhance urgency based on sentiment\nif (aiResponse.sentiment === 'angry' && aiResponse.urgency !== 'high') {\n  aiResponse.urgency = 'high';\n  aiResponse.priority_score = Math.max(aiResponse.priority_score, 9);\n}\n\n// Return enhanced classification\nreturn {\n  ...aiResponse,\n  sentiment_score: sentimentScore,\n  email_subject: $('Extract Email Data').item.json.email_subject,\n  sender_email: $('Extract Email Data').item.json.sender_email,\n  sender_name: $('Extract Email Data').item.json.sender_name,\n  received_time: $('Extract Email Data').item.json.received_time,\n  processed_time: new Date().toISOString()\n};"
+      },
+      "id": "parse-enhance",
+      "name": "Parse & Enhance AI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300],
+      "notes": "Parses JSON and adds sentiment scoring logic"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.category }}",
+                    "rightValue": "support",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "support"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.category }}",
+                    "rightValue": "sales",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "sales"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.category }}",
+                    "rightValue": "spam",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "spam"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "router",
+      "name": "Route by Category",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [1050, 300],
+      "notes": "Routes emails to appropriate processing branches"
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "boardId": {
+          "__rl": true,
+          "value": "TRELLO_BOARD_ID",
+          "mode": "id"
+        },
+        "listId": {
+          "__rl": true,
+          "value": "SUPPORT_LIST_ID",
+          "mode": "id"
+        },
+        "name": "=🚨 {{ $json.email_subject }}",
+        "description": "=📧 **From:** {{ $json.sender_name }} ({{ $json.sender_email }})\\n📅 **Received:** {{ $json.received_time }}\\n\\n---\\n\\n### 🤖 AI Analysis\\n\\n**Summary:** {{ $json.summary }}\\n\\n**Urgency:** {{ $json.urgency }}\\n**Sentiment:** {{ $json.sentiment }}\\n**Priority Score:** {{ $json.priority_score }}/10\\n\\n**Suggested Action:**\\n{{ $json.suggested_action }}\\n\\n---\\n\\n### 📨 Original Email\\n\\n{{ $('Extract Email Data').item.json.email_body }}",
+        "additionalFields": {
+          "customFieldsUi": {
+            "customFieldValues": [
+              {
+                "fieldId": "urgency",
+                "value": "={{ $json.urgency }}"
+              }
+            ]
+          },
+          "labelIds": [
+            "AI_CLASSIFIED_LABEL_ID",
+            "={{ $json.urgency === 'high' ? 'HIGH_PRIORITY_LABEL_ID' : 'NORMAL_LABEL_ID' }}"
+          ]
+        }
+      },
+      "id": "trello-support",
+      "name": "Create Support Ticket",
+      "type": "n8n-nodes-base.trello",
+      "typeVersion": 1,
+      "position": [1250, 200],
+      "credentials": {
+        "trelloApi": {"id": "TRELLO_CREDENTIALS_ID",
+          "name": "Trello API"
+        }
+      },
+      "notes": "Creates support ticket in Trello with AI insights"
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "boardId": {
+          "__rl": true,
+          "value": "TRELLO_BOARD_ID",
+          "mode": "id"
+        },
+        "listId": {
+          "__rl": true,
+          "value": "SALES_LIST_ID",
+          "mode": "id"
+        },
+        "name": "=💰 {{ $json.email_subject }}",
+        "description": "=📧 **From:** {{ $json.sender_name }} ({{ $json.sender_email }})\\n📅 **Received:** {{ $json.received_time }}\\n\\n---\\n\\n### 🤖 AI Analysis\\n\\n**Summary:** {{ $json.summary }}\\n\\n**Urgency:** {{ $json.urgency }}\\n**Sentiment:** {{ $json.sentiment }}\\n**Priority Score:** {{ $json.priority_score }}/10\\n\\n**Suggested Action:**\\n{{ $json.suggested_action }}\\n\\n---\\n\\n### 📨 Original Email\\n\\n{{ $('Extract Email Data').item.json.email_body }}",
+        "additionalFields": {
+          "labelIds": [
+            "NEW_LEAD_LABEL_ID",
+            "AI_CLASSIFIED_LABEL_ID"
+          ]
+        }
+      },
+      "id": "trello-sales",
+      "name": "Create Sales Lead",
+      "type": "n8n-nodes-base.trello",
+      "typeVersion": 1,
+      "position": [1250, 400],
+      "credentials": {
+        "trelloApi": {
+          "id": "TRELLO_CREDENTIALS_ID",
+          "name": "Trello API"
+        }
+      },
+      "notes": "Creates sales lead card in Trello"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Extract Email Data').item.json.sender_email }}",
+        "subject": "=Re: {{ $('Extract Email Data').item.json.email_subject }}",
+        "emailType": "html",
+        "message": "=<!DOCTYPE html>\n<html>\n<head>\n  <style>\n    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }\n    .container { max-width: 600px; margin: 0 auto; padding: 20px; }\n    .header { background: #4CAF50; color: white; padding: 20px; text-align: center; border-radius: 5px 5px 0 0; }\n    .content { background: #f9f9f9; padding: 30px; border: 1px solid #ddd; }\n    .footer { background: #333; color: white; padding: 15px; text-align: center; font-size: 12px; border-radius: 0 0 5px 5px; }\n    .ticket-box { background: white; padding: 15px; margin: 20px 0; border-left: 4px solid #4CAF50; }\n    .button { display: inline-block; padding: 12px 24px; background: #4CAF50; color: white; text-decoration: none; border-radius: 5px; margin: 10px 0; }\n  </style>\n</head>\n<body>\n  <div class=\"container\">\n    <div class=\"header\">\n      <h2>🎫 Support Ticket Created</h2>\n    </div>\n    <div class=\"content\">\n      <p>Hi {{ $('Extract Email Data').item.json.sender_name || 'there' }},</p>\n      \n      <p>Thank you for contacting our support team! We've received your message and created a support ticket to track your request.</p>\n      \n      <div class=\"ticket-box\">\n        <strong>📋 Ticket Details:</strong><br>\n        <strong>Ticket ID:</strong> #{{ $json.id.substring(0, 8) }}<br>\n        <strong>Subject:</strong> {{ $('Extract Email Data').item.json.email_subject }}<br>\n        <strong>Priority:</strong> {{ $('Parse & Enhance AI Response').item.json.urgency.toUpperCase() }}<br>\n        <strong>Created:</strong> {{ $now.format('MMMM DD, YYYY at HH:mm') }}\n      </div>\n      \n      <p><strong>⏱️ Expected Response Time:</strong><br>\n      {{ $('Parse & Enhance AI Response').item.json.urgency === 'high' ? 'Within 4 hours' : $('Parse & Enhance AI Response').item.json.urgency === 'medium' ? 'Within 24 hours' : 'Within 2 business days' }}</p>\n      \n      <p>Our team is reviewing your request and will respond soon. You can track the status of your ticket using the link below:</p>\n      \n      <a href=\"{{ $json.url }}\" class=\"button\">📊 View Ticket Status</a>\n      \n      <p style=\"margin-top: 30px; font-size: 14px; color: #666;\">\n        <strong>💡 Pro Tip:</strong> Reply to this email to add more information to your ticket.\n      </p>\n    </div>\n    <div class=\"footer\">\n      <p>This is an automated response from our AI-powered support system.<br>\n      For urgent issues, please call: +1-555-SUPPORT</p>\n    </div>\n  </div>\n</body>\n</html>",
+        "options": {}
+      },
+      "id": "gmail-reply-support",
+      "name": "Send Support Auto-Reply",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [1450, 200],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GMAIL_CREDENTIALS_ID",
+          "name": "Gmail OAuth2"
+        }
+      },
+      "notes": "Sends professional auto-acknowledgment to customer"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Extract Email Data').item.json.sender_email }}",
+        "subject": "=Re: {{ $('Extract Email Data').item.json.email_subject }}",
+        "emailType": "html",
+        "message": "=<!DOCTYPE html>\n<html>\n<head>\n  <style>\n    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }\n    .container { max-width: 600px; margin: 0 auto; padding: 20px; }\n    .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; text-align: center; border-radius: 5px 5px 0 0; }\n    .content { background: #f9f9f9; padding: 30px; border: 1px solid #ddd; }\n    .footer { background: #333; color: white; padding: 15px; text-align: center; font-size: 12px; border-radius: 0 0 5px 5px; }\n    .cta-box { background: white; padding: 20px; margin: 20px 0; text-align: center; border: 2px dashed #667eea; border-radius: 10px; }\n    .button { display: inline-block; padding: 12px 24px; background: #667eea; color: white; text-decoration: none; border-radius: 5px; margin: 10px 5px; }\n  </style>\n</head>\n<body>\n  <div class=\"container\">\n    <div class=\"header\">\n      <h2>💼 Thanks for Your Interest!</h2>\n    </div>\n    <div class=\"content\">\n      <p>Hi {{ $('Extract Email Data').item.json.sender_name || 'there' }},</p>\n      \n      <p>Thank you for reaching out to our sales team! We're excited about the opportunity to work with you.</p>\n      \n      <p>📋 <strong>We've logged your inquiry:</strong><br>\n      <em>{{ $('Parse & Enhance AI Response').item.json.summary }}</em></p>\n      \n      <div class=\"cta-box\">\n        <h3 style=\"color: #667eea; margin-top: 0;\">🚀 Next Steps</h3>\n        <p>A sales representative will contact you within <strong>1 business day</strong>.</p>\n        <p>In the meantime, feel free to:</p>\n        <a href=\"https://yourcompany.com/pricing\" class=\"button\">💰 View Pricing</a>\n        <a href=\"https://calendly.com/your-sales-team\" class=\"button\">📅 Book a Demo</a>\n      </div>\n      \n      <p><strong>📚 Helpful Resources:</strong></p>\n      <ul>\n        <li><a href=\"#\">Product Overview</a></li>\n        <li><a href=\"#\">Case Studies</a></li>\n        <li><a href=\"#\">Integration Options</a></li>\n      </ul>\n      \n      <p style=\"margin-top: 30px;\">Looking forward to connecting soon!</p>\n      \n      <p>Best regards,<br>\n      <strong>The Sales Team</strong></p>\n    </div>\n    <div class=\"footer\">\n      <p>Questions? Reply to this email or call us at +1-555-SALES<br>\n      Powered by AI-assisted sales automation</p>\n    </div>\n  </div>\n</body>\n</html>",
+        "options": {}
+      },
+      "id": "gmail-reply-sales",
+      "name": "Send Sales Auto-Reply",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [1450, 400],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "GMAIL_CREDENTIALS_ID",
+          "name": "Gmail OAuth2"
+        }
+      },
+      "notes": "Sends engaging sales response with CTAs"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "SLACK_WEBHOOK_SUPPORT_URL",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"blocks\": [\n    {\n      \"type\": \"header\",\n      \"text\": {\n        \"type\": \"plain_text\",\n        \"text\": \"🚨 New Support Ticket {{ $('Parse & Enhance AI Response').item.json.urgency === 'high' ? '- HIGH PRIORITY!' : '' }}\"\n      }\n    },\n    {\n      \"type\": \"section\",\n      \"fields\": [\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": \"*From:*\\n{{ $('Parse & Enhance AI Response').item.json.sender_name }} ({{ $('Parse & Enhance AI Response').item.json.sender_email }})\"\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": \"*Ticket ID:*\\n#{{ $('Create Support Ticket').item.json.id.substring(0, 8) }}\"\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": \"*Subject:*\\n{{ $('Parse & Enhance AI Response').item.json.email_subject }}\"\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": \"*Urgency:*\\n{{ $('Parse & Enhance AI Response').item.json.urgency.toUpperCase() }} ({{ $('Parse & Enhance AI Response').item.json.priority_score }}/10)\"\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": \"*Sentiment:*\\n{{ $('Parse & Enhance AI Response').item.json.sentiment === 'angry' ? '😡 ANGRY' : $('Parse & Enhance AI Response').item.json.sentiment === 'negative' ? '😟 Negative' : $('Parse & Enhance AI Response').item.json.sentiment === 'positive' ? '😊 Positive' : '😐 Neutral' }}\"\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": \"*Received:*\\n{{ $now.format('MMM DD, YYYY HH:mm') }}\"\n        }\n      ]\n    },\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": \"*🤖 AI Summary:*\\n{{ $('Parse & Enhance AI Response').item.json.summary }}\"\n      }\n    },\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": \"*⚡ Suggested Action:*\\n{{ $('Parse & Enhance AI Response').item.json.suggested_action }}\"\n      }\n    },\n    {\n      \"type\": \"actions\",\n      \"elements\": [\n        {\n          \"type\": \"button\",\n          \"text\": {\n            \"type\": \"plain_text\",\n            \"text\": \"🎫 View Ticket\"\n          },\n          \"url\": \"{{ $('Create Support Ticket').item.json.url }}\",\n          \"style\": \"primary\"\n        },\n        {\n          \"type\": \"button\",\n          \"text\": {\n            \"type\": \"plain_text\",\n            \"text\": \"📧 View Email\"\n          },\n          \"url\": \"https://mail.google.com\"\n        }\n      ]\n    },\n    {\n      \"type\": \"context\",\n      \"elements\": [\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": \"Auto-reply sent | Processed by AI in {{ $('Parse & Enhance AI Response').item.json.processed_time }}\"\n        }\n      ]\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "slack-notify-support",
+      "name": "Slack Alert - Support",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1650, 200],
+      "notes": "Sends rich notification to #support channel"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "SLACK_WEBHOOK_SALES_URL",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"blocks\": [\n    {\n      \"type\": \"header\",\n      \"text\": {\n        \"type\": \"plain_text\",\n        \"text\": \"💰 New Sales Lead!\"\n      }\n    },\n    {\n      \"type\": \"section\",\n      \"fields\": [\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": \"*Contact:*\\n{{ $('Parse & Enhance AI Response').item.json.sender_name }}\\n{{ $('Parse & Enhance AI Response').item.json.sender_email }}\"\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": \"*Lead ID:*\\n#{{ $('Create Sales Lead').item.json.id.substring(0, 8) }}\"\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": \"*Subject:*\\n{{ $('Parse & Enhance AI Response').item.json.email_subject }}\"\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": \"*Priority:*\\n{{ $('Parse & Enhance AI Response').item.json.priority_score }}/10\"\n        }\n      ]\n    },\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": \"*🤖 AI Analysis:*\\n{{ $('Parse & Enhance AI Response').item.json.summary }}\"\n      }\n    },\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": \"*💡 Next Steps:*\\n{{ $('Parse & Enhance AI Response').item.json.suggested_action }}\"\n      }\n    },\n    {\n      \"type\": \"actions\",\n      \"elements\": [\n        {\n          \"type\": \"button\",\n          \"text\": {\n            \"type\": \"plain_text\",\n            \"text\": \"🎯 View Lead\"\n          },\n          \"url\": \"{{ $('Create Sales Lead').item.json.url }}\",\n          \"style\": \"primary\"\n        },\n        {\n          \"type\": \"button\",\n          \"text\": {\n            \"type\": \"plain_text\",\n            \"text\": \"📅 Schedule Call\"\n          },\n          \"url\": \"https://calendly.com/sales-team\"\n        }\n      ]\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "slack-notify-sales",
+      "name": "Slack Alert - Sales",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1650, 400],
+      "notes": "Sends notification to #sales channel"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Log spam email for metrics\nconst spamData = {\n  timestamp: new Date().toISOString(),\n  category: 'spam',\n  subject: $('Extract Email Data').item.json.email_subject,\n  sender: $('Extract Email Data').item.json.sender_email,\n  classification: $('Parse & Enhance AI Response').item.json\n};\n\nreturn { spam_logged: true, ...spamData };"
+      },
+      "id": "spam-logger",
+      "name": "Log Spam",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 600],
+      "notes": "Logs spam for analytics, no action taken"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Email_Metrics",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ $('Parse & Enhance AI Response').item.json.processed_time }}",
+            "category": "={{ $('Parse & Enhance AI Response').item.json.category }}",
+            "urgency": "={{ $('Parse & Enhance AI Response').item.json.urgency }}",
+            "sentiment": "={{ $('Parse & Enhance AI Response').item.json.sentiment }}",
+            "priority_score": "={{ $('Parse & Enhance AI Response').item.json.priority_score }}",
+            "sender": "={{ $('Parse & Enhance AI Response').item.json.sender_email }}",
+            "subject": "={{ $('Parse & Enhance AI Response').item.json.email_subject }}",
+            "response_time_seconds": "={{ ($now.toUnixInteger() - $('Extract Email Data').item.json.received_time.toUnixInteger()) }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "metrics-logger",
+      "name": "Log to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1850, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CREDENTIALS_ID",
+          "name": "Google Sheets OAuth2"
+        }
+      },
+      "notes": "Tracks all emails for analytics dashboard"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": ""
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ]
+        },
+        "combineOperation": "any"
+      },
+      "id": "error-detector",
+      "name": "Error Detector",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2050, 300],
+      "notes": "Catches any errors in workflow"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "SLACK_WEBHOOK_ERRORS_URL",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"text\": \"⚠️ Email Triager Error Detected\",\n  \"blocks\": [\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": \"*Error in Smart Inbox Triager:*\\n```{{ $json.error }}```\\n\\n*Email Subject:* {{ $('Extract Email Data').item.json.email_subject }}\\n*Timestamp:* {{ $now.format() }}\"\n      }\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "error-notifier",
+      "name": "Alert on Error",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2250, 200],
+      "notes": "Alerts team if workflow fails"
+    }
+  ],
+  "connections": {
+    "Gmail Trigger": {
+      "main": [[{ "node": "Extract Email Data", "type": "main", "index": 0 }]]
+    },
+    "Extract Email Data": {
+      "main": [[{ "node": "AI Classification (OpenAI)", "type": "main", "index": 0 }]]
+    },
+    "AI Classification (OpenAI)": {
+      "main": [[{ "node": "Parse & Enhance AI Response", "type": "main", "index": 0 }]]
+    },
+    "Parse & Enhance AI Response": {
+      "main": [[{ "node": "Route by Category", "type": "main", "index": 0 }]]
+    },
+    "Route by Category": {
+      "main": [
+        [{ "node": "Create Support Ticket", "type": "main", "index": 0 }],
+        [{ "node": "Create Sales Lead", "type": "main", "index": 0 }],
+        [{ "node": "Log Spam", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create Support Ticket": {
+      "main": [[{ "node": "Send Support Auto-Reply", "type": "main", "index": 0 }]]
+    },
+    "Create Sales Lead": {
+      "main": [[{ "node": "Send Sales Auto-Reply", "type": "main", "index": 0 }]]
+    },
+    "Send Support Auto-Reply": {
+      "main": [[{ "node": "Slack Alert - Support", "type": "main", "index": 0 }]]
+    },
+    "Send Sales Auto-Reply": {
+      "main": [[{ "node": "Slack Alert - Sales", "type": "main", "index": 0 }]]
+    },
+    "Slack Alert - Support": {
+      "main": [[{ "node": "Log to Google Sheets", "type": "main", "index": 0 }]]
+    },
+    "Slack Alert - Sales": {
+      "main": [[{ "node": "Log to Google Sheets", "type": "main", "index": 0 }]]
+    },
+    "Log Spam": {
+      "main": [[{ "node": "Log to Google Sheets", "type": "main", "index": 0 }]]
+    },
+    "Log to Google Sheets": {
+      "main": [[{ "node": "Error Detector", "type": "main", "index": 0 }]]
+    },
+    "Error Detector": {
+      "main": [[{ "node": "Alert on Error", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "ERROR_WORKFLOW_ID"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "id": "hackathon",
+      "name": "Hackathon Project"
+    },
+    {
+      "id": "ai-automation",
+      "name": "AI Automation"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2025-11-21T00:00:00.000Z",
+  "versionId": "1.0.0"
+}
