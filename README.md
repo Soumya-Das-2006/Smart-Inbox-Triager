@@ -73,12 +73,6 @@ It classifies messages, generates responses, creates task tickets, and notifies 
 
 ---
 
-## 🏆 Recognition
-
-🥇 **Winner — n8n Automation Hackathon 2025**
-
----
-
 ## 📄 License
 
 This project is licensed under the **MIT License**.  
